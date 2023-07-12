@@ -65,8 +65,10 @@ class IncModel(IncrementalLearner):
         )
         num_params = sum(np.prod(x.shape) for x in self._network.parameters()) / 1000000
         print(f"Model num_params {num_params}")
-        # self._parallel_network = DataParallel(self._network)
-        self._parallel_network = self._network
+        if cfg.dataparallel:
+            self._model_train = DataParallel(self._network)
+        else:
+            self._model_train = self._network
         self._train_head = cfg["train_head"]
         self._infer_head = cfg["infer_head"]
         self._old_model = None
@@ -90,18 +92,27 @@ class IncModel(IncrementalLearner):
                 if not os.path.exists(save_path):
                     os.mkdir(save_path)
 
+    def network(self):
+        return self._network
+
     def eval(self):
-        self._parallel_network.eval()
+        self._model_train.eval()
 
     def train(self):
         if self._der:
-            self._parallel_network.train()
-            self._parallel_network.module.convnets[-1].train()
+            self._model_train.train()
+            if self._cfg.dataparallel:
+                self._model_train.module.convnets[-1].train()
+            else:
+                self._model_train.convnets[-1].train()
             if self._task >= 1:
                 for i in range(self._task):
-                    self._parallel_network.module.convnets[i].eval()
+                    if self._cfg.dataparallel:
+                        self._model_train.module.convnets[i].eval()
+                    else:
+                        self._model_train.convnets[i].eval()
         else:
-            self._parallel_network.train()
+            self._model_train.train()
 
     def _before_task(self, taski, inc_dataset):
         self._ex.logger.info(f"Begin step {taski}")
@@ -132,8 +143,12 @@ class IncModel(IncrementalLearner):
 
         if self._der and self._task > 0:
             for i in range(self._task):
-                for p in self._parallel_network.module.convnets[i].parameters():
-                    p.requires_grad = False
+                if self._cfg.dataparallel:
+                    for p in self._model_train.module.convnets[i].parameters():
+                        p.requires_grad = False
+                else:
+                    for p in self._model_train.convnets[i].parameters():
+                        p.requires_grad = False
 
         self._optimizer = factory.get_optimizer(filter(lambda p: p.requires_grad, self._network.parameters()),
                                                 self._opt_name, lr, weight_decay)
@@ -160,8 +175,8 @@ class IncModel(IncrementalLearner):
         train_new_accu = ClassErrorMeter(accuracy=True)
         train_old_accu = ClassErrorMeter(accuracy=True)
 
-        utils.display_weight_norm(self._ex.logger, self._parallel_network, self._increments, "Initial trainset")
-        utils.display_feature_norm(self._ex.logger, self._parallel_network, train_loader, self._n_classes,
+        utils.display_weight_norm(self._ex.logger, self._model_train, self._increments, "Initial trainset")
+        utils.display_feature_norm(self._ex.logger, self._model_train, train_loader, self._n_classes,
                                    self._increments, "Initial trainset")
 
         self._optimizer.zero_grad()
@@ -236,15 +251,15 @@ class IncModel(IncrementalLearner):
         # For the large-scale dataset, we manage the data in the shared memory.
         self._inc_dataset.shared_data_inc = train_loader.dataset.share_memory
 
-        utils.display_weight_norm(self._ex.logger, self._parallel_network, self._increments, "After training")
-        utils.display_feature_norm(self._ex.logger, self._parallel_network, train_loader, self._n_classes,
+        utils.display_weight_norm(self._ex.logger, self._model_train, self._increments, "After training")
+        utils.display_feature_norm(self._ex.logger, self._model_train, train_loader, self._n_classes,
                                    self._increments, "Trainset")
         self._run.info[f"trial{self._trial_i}"][f"task{self._task}_train_accu"] = round(accu.value()[0], 3)
 
     def _forward_loss(self, inputs, targets, old_classes, new_classes, accu=None, new_accu=None, old_accu=None):
         inputs, targets = inputs.to(self._device, non_blocking=True), targets.to(self._device, non_blocking=True)
 
-        outputs = self._parallel_network(inputs)
+        outputs = self._model_train(inputs)
         if accu is not None:
             accu.add(outputs['logit'], targets)
             # accu.add(logits.detach(), targets.cpu().numpy())
@@ -269,7 +284,7 @@ class IncModel(IncrementalLearner):
         return loss, aux_loss
 
     def _after_task(self, taski, inc_dataset):
-        network = deepcopy(self._parallel_network)
+        network = deepcopy(self._model_train)
         network.eval()
         self._ex.logger.info("save model")
         if self._cfg["save_ckpt"] and taski >= self._cfg["start_task"]:
@@ -285,9 +300,12 @@ class IncModel(IncrementalLearner):
                                                        mode="balanced_train")
 
             # finetuning
-            self._parallel_network.module.classifier.reset_parameters()
+            if self._cfg.dataparallel:
+                self._model_train.module.classifier.reset_parameters()
+            else:
+                self._model_train.classifier.reset_parameters()
             finetune_last_layer(self._ex.logger,
-                                self._parallel_network,
+                                self._model_train,
                                 train_loader,
                                 self._n_classes,
                                 nepoch=self._decouple["epochs"],
@@ -297,7 +315,7 @@ class IncModel(IncrementalLearner):
                                 weight_decay=self._decouple["weight_decay"],
                                 loss_type="ce",
                                 temperature=self._decouple["temperature"])
-            network = deepcopy(self._parallel_network)
+            network = deepcopy(self._model_train)
             if self._cfg["save_ckpt"]:
                 save_path = os.path.join(os.getcwd(), "ckpts")
                 torch.save(network.cpu().state_dict(), "{}/decouple_step{}.ckpt".format(save_path, self._task))
@@ -326,9 +344,12 @@ class IncModel(IncrementalLearner):
                     torch.save(memory, "{}/mem_step{}.ckpt".format(save_path, self._task))
                     self._ex.logger.info(f"Save step{self._task} memory!")
 
-        self._parallel_network.eval()
-        self._old_model = deepcopy(self._parallel_network)
-        self._old_model.module.freeze()
+        self._model_train.eval()
+        self._old_model = deepcopy(self._model_train)
+        if self._cfg.dataparallel:
+            self._old_model.module.freeze()
+        else:
+            self._old_model.freeze()
         del self._inc_dataset.shared_data_inc
         self._inc_dataset.shared_data_inc = None
 
@@ -344,11 +365,11 @@ class IncModel(IncrementalLearner):
 
     def _compute_accuracy_by_netout(self, data_loader):
         preds, targets = [], []
-        self._parallel_network.eval()
+        self._model_train.eval()
         with torch.no_grad():
             for i, (inputs, lbls) in enumerate(data_loader):
                 inputs = inputs.to(self._device, non_blocking=True)
-                _preds = self._parallel_network(inputs)['logit']
+                _preds = self._model_train(inputs)['logit']
                 if self._cfg["postprocessor"]["enable"] and self._task > 0:
                     _preds = self._network.postprocessor.post_process(_preds, self._task_size)
                 preds.append(_preds.detach().cpu().numpy())
@@ -358,7 +379,7 @@ class IncModel(IncrementalLearner):
         return preds, targets
 
     def _compute_accuracy_by_ncm(self, loader):
-        features, targets_ = extract_features(self._parallel_network, loader)
+        features, targets_ = extract_features(self._model_train, loader)
         targets = np.zeros((targets_.shape[0], self._n_classes), np.float32)
         targets[range(len(targets_)), targets_.astype("int32")] = 1.0
 
@@ -387,7 +408,7 @@ class IncModel(IncrementalLearner):
             self._network.postprocessor.reset(n_classes=self._n_classes)
             self._network.postprocessor.update(self._ex.logger,
                                                self._task_size,
-                                               self._parallel_network,
+                                               self._model_train,
                                                bic_loader,
                                                loss_criterion=bic_loss)
         elif self._cfg["postprocessor"]["type"].lower() == "wa":
@@ -399,7 +420,7 @@ class IncModel(IncrementalLearner):
             shared_data_inc = self._inc_dataset.shared_data_inc
         else:
             shared_data_inc = None
-        self._class_means = update_classes_mean(self._parallel_network,
+        self._class_means = update_classes_mean(self._model_train,
                                                 self._inc_dataset,
                                                 self._n_classes,
                                                 self._task_size,
@@ -422,7 +443,7 @@ class IncModel(IncrementalLearner):
             self._inc_dataset.data_memory, self._inc_dataset.targets_memory = random_selection(
                 self._n_classes,
                 self._task_size,
-                self._parallel_network,
+                self._model_train,
                 self._ex.logger,
                 inc_dataset,
                 self._memory_per_class,
@@ -433,7 +454,7 @@ class IncModel(IncrementalLearner):
             self._inc_dataset.data_memory, self._inc_dataset.targets_memory, self._herding_matrix = herding(
                 self._n_classes,
                 self._task_size,
-                self._parallel_network,
+                self._model_train,
                 self._herding_matrix,
                 inc_dataset,
                 data_inc,

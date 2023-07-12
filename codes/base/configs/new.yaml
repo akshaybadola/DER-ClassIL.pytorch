@@ -13,6 +13,7 @@ infer_head: 'softmax'
 channel: 64
 use_bias: False
 last_relu: False
+dataparallel: False
 
 der: False
 use_aux_cls: False

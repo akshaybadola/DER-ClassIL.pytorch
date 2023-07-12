@@ -118,7 +118,7 @@ def _train(cfg, _run, ex, tensorboard):
             inc_dataset.shared_data_inc = train_loader.dataset.share_memory
         elif task_i < cfg['start_task']:
             state_dict = torch.load(f'./ckpts/step{task_i}.ckpt')
-            model._parallel_network.load_state_dict(state_dict)
+            model._model_train.load_state_dict(state_dict)
             inc_dataset.shared_data_inc = train_loader.dataset.share_memory
         else:
             model.train_task(train_loader, val_loader)
@@ -206,7 +206,7 @@ def test(_run, _rnd, _seed):
         )
         model.before_task(taski, inc_dataset)
         state_dict = torch.load(f'./ckpts/step{taski}.ckpt')
-        model._parallel_network.load_state_dict(state_dict)
+        model._model_train.load_state_dict(state_dict)
         model.eval()
 
         #Build exemplars
