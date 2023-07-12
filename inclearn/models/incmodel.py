@@ -63,7 +63,10 @@ class IncModel(IncrementalLearner):
             use_bias=cfg["use_bias"],
             dataset=cfg["dataset"],
         )
-        self._parallel_network = DataParallel(self._network)
+        num_params = sum(np.prod(x.shape) for x in self._network.parameters()) / 1000000
+        print(f"Model num_params {num_params}")
+        # self._parallel_network = DataParallel(self._network)
+        self._parallel_network = self._network
         self._train_head = cfg["train_head"]
         self._infer_head = cfg["infer_head"]
         self._old_model = None
