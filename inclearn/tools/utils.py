@@ -71,8 +71,8 @@ def set_seed(seed):
 def display_weight_norm(logger, network, increments, tag):
     weight_norms = [[] for _ in range(len(increments))]
     increments = np.cumsum(np.array(increments))
-    for idx in range(network.module.classifier.weight.shape[0]):
-        norm = torch.norm(network.module.classifier.weight[idx].data, p=2).item()
+    for idx in range(network.classifier.weight.shape[0]):
+        norm = torch.norm(network.classifier.weight[idx].data, p=2).item()
         for i in range(len(weight_norms)):
             if idx < increments[i]:
                 break

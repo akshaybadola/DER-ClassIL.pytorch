@@ -92,8 +92,12 @@ class IncModel(IncrementalLearner):
                 if not os.path.exists(save_path):
                     os.mkdir(save_path)
 
-    def network(self):
-        return self._network
+    @property
+    def network_module(self):
+        if self._cfg.dataparallel:
+            return self._model_train.module
+        else:
+            return self._model_train
 
     def eval(self):
         self._model_train.eval()
@@ -101,16 +105,10 @@ class IncModel(IncrementalLearner):
     def train(self):
         if self._der:
             self._model_train.train()
-            if self._cfg.dataparallel:
-                self._model_train.module.convnets[-1].train()
-            else:
-                self._model_train.convnets[-1].train()
+            self.network_module.convnets[-1].train()
             if self._task >= 1:
                 for i in range(self._task):
-                    if self._cfg.dataparallel:
-                        self._model_train.module.convnets[i].eval()
-                    else:
-                        self._model_train.convnets[i].eval()
+                    self.network_module.convnets[i].eval()
         else:
             self._model_train.train()
 
@@ -143,12 +141,8 @@ class IncModel(IncrementalLearner):
 
         if self._der and self._task > 0:
             for i in range(self._task):
-                if self._cfg.dataparallel:
-                    for p in self._model_train.module.convnets[i].parameters():
-                        p.requires_grad = False
-                else:
-                    for p in self._model_train.convnets[i].parameters():
-                        p.requires_grad = False
+                for p in self.network_module.convnets[i].parameters():
+                    p.requires_grad = False
 
         self._optimizer = factory.get_optimizer(filter(lambda p: p.requires_grad, self._network.parameters()),
                                                 self._opt_name, lr, weight_decay)
@@ -175,8 +169,8 @@ class IncModel(IncrementalLearner):
         train_new_accu = ClassErrorMeter(accuracy=True)
         train_old_accu = ClassErrorMeter(accuracy=True)
 
-        utils.display_weight_norm(self._ex.logger, self._model_train, self._increments, "Initial trainset")
-        utils.display_feature_norm(self._ex.logger, self._model_train, train_loader, self._n_classes,
+        utils.display_weight_norm(self._ex.logger, self.network_module, self._increments, "Initial trainset")
+        utils.display_feature_norm(self._ex.logger, self.network_module, train_loader, self._n_classes,
                                    self._increments, "Initial trainset")
 
         self._optimizer.zero_grad()
@@ -251,8 +245,8 @@ class IncModel(IncrementalLearner):
         # For the large-scale dataset, we manage the data in the shared memory.
         self._inc_dataset.shared_data_inc = train_loader.dataset.share_memory
 
-        utils.display_weight_norm(self._ex.logger, self._model_train, self._increments, "After training")
-        utils.display_feature_norm(self._ex.logger, self._model_train, train_loader, self._n_classes,
+        utils.display_weight_norm(self._ex.logger, self.network_module, self._increments, "After training")
+        utils.display_feature_norm(self._ex.logger, self.network_module, train_loader, self._n_classes,
                                    self._increments, "Trainset")
         self._run.info[f"trial{self._trial_i}"][f"task{self._task}_train_accu"] = round(accu.value()[0], 3)
 
@@ -300,10 +294,7 @@ class IncModel(IncrementalLearner):
                                                        mode="balanced_train")
 
             # finetuning
-            if self._cfg.dataparallel:
-                self._model_train.module.classifier.reset_parameters()
-            else:
-                self._model_train.classifier.reset_parameters()
+            self.network_module.classifier.reset_parameters()
             finetune_last_layer(self._ex.logger,
                                 self._model_train,
                                 train_loader,
