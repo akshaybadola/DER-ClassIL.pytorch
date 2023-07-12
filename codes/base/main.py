@@ -9,6 +9,7 @@ import os.path as osp
 import copy
 import time
 import shutil
+import pickle
 import cProfile
 import logging
 from pathlib import Path
@@ -219,6 +220,8 @@ def test(_run, _rnd, _seed):
         ex.logger.info(f"task{taski} test top1acc:{test_acc_stats['top1']}")
 
     avg_test_acc = results_utils.compute_avg_inc_acc(test_results['results'])
+    with open("test_results.pkl", "wb") as f:
+        pickle.dump(test_results, f)
     ex.logger.info(f"Test Average Incremental Accuracy: {avg_test_acc}")
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ def train(cfg, model, optimizer, device, train_loader):
         # assert torch.isnan(inputs).sum().item() == 0
         optimizer.zero_grad()
         inputs, targets = inputs.to(device), targets.to(device)
-        logits = model._parallel_network(inputs)['logit']
+        logits = model._model_train(inputs)['logit']
         if accu is not None:
             accu.add(logits.detach(), targets)
 
@@ -65,7 +65,7 @@ def test(cfg, model, device, test_loader):
         for i, (inputs, targets) in enumerate(test_loader, start=1):
             # assert torch.isnan(inputs).sum().item() == 0
             inputs, targets = inputs.to(device), targets.to(device)
-            logits = model._parallel_network(inputs)['logit']
+            logits = model._model_train(inputs)['logit']
             if accu is not None:
                 accu.add(logits.detach(), targets)
             loss = _compute_loss(cfg, logits, targets, device)
